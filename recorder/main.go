@@ -111,7 +111,7 @@ func main() {
 			// Draw a red crosshair to represent the cursor
 			cursorColor := color.RGBA{R: 255, G: 0, B: 0, A: 255}
 			armLength := 15 // 15px out from the center
-			thickness := 3  // 3px thick lines
+			thickness := 5  // 5px thick lines
 			// Horizontal line
 			draw.Draw(img, image.Rect(drawX-armLength, drawY-thickness/2, drawX+armLength, drawY+thickness/2), &image.Uniform{C: cursorColor}, image.Point{}, draw.Src)
 			// Vertical line

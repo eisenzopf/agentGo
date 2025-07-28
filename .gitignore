@@ -1,1 +1,3 @@
 *.png
+.DS_Store
+mouse_movements.csv

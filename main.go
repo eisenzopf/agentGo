@@ -8,9 +8,11 @@ import (
 	"image/png"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-vgo/robotgo"
 	"github.com/google/generative-ai-go/genai"
 	"github.com/kbinani/screenshot"
 	"google.golang.org/api/option"
@@ -24,6 +26,24 @@ func main() {
 	if apiKey == "" {
 		log.Fatal("GEMINI_API_KEY environment variable not set")
 	}
+
+	// Get screen dimensions for scaling
+	logicalWidth, logicalHeight := robotgo.GetScreenSize()
+	bounds := screenshot.GetDisplayBounds(0)
+	physicalWidth := bounds.Dx()
+	physicalHeight := bounds.Dy()
+
+	if physicalWidth == 0 || physicalHeight == 0 {
+		log.Fatal("Could not get physical screen dimensions.")
+	}
+
+	xScale := float64(logicalWidth) / float64(physicalWidth)
+	yScale := float64(logicalHeight) / float64(physicalHeight)
+
+	log.Printf("Physical (Screenshot) Dimensions: %d x %d", physicalWidth, physicalHeight)
+	log.Printf("Logical (Mouse) Dimensions: %d x %d", logicalWidth, logicalHeight)
+	log.Printf("Scaling factors: x=%.2f, y=%.2f", xScale, yScale)
+
 
 	// Create a new Gemini client
 	ctx, cancel := context.WithTimeout(context.Background(), recordingTime)
@@ -68,7 +88,6 @@ func main() {
 			return
 		case t := <-ticker.C:
 			// Capture the screen
-			bounds := screenshot.GetDisplayBounds(0)
 			img, err := screenshot.CaptureRect(bounds)
 			if err != nil {
 				log.Printf("failed to capture screen: %v", err)
@@ -95,12 +114,21 @@ func main() {
 				if coordsText, ok := res.Candidates[0].Content.Parts[0].(genai.Text); ok {
 					coords := strings.Split(strings.TrimSpace(string(coordsText)), ",")
 					if len(coords) == 2 {
-						timestamp := t.Sub(startTime).Milliseconds()
-						record := []string{fmt.Sprintf("%d", timestamp), coords[0], coords[1]}
-						if err := writer.Write(record); err != nil {
-							log.Printf("failed to write record to csv: %v", err)
+						geminiX, errX := strconv.Atoi(coords[0])
+						geminiY, errY := strconv.Atoi(coords[1])
+
+						if errX == nil && errY == nil {
+							// Scale the coordinates
+							finalX := int(float64(geminiX) * xScale)
+							finalY := int(float64(geminiY) * yScale)
+
+							timestamp := t.Sub(startTime).Milliseconds()
+							record := []string{fmt.Sprintf("%d", timestamp), fmt.Sprintf("%d", finalX), fmt.Sprintf("%d", finalY)}
+							if err := writer.Write(record); err != nil {
+								log.Printf("failed to write record to csv: %v", err)
+							}
+							fmt.Printf("Recorded Scaled Coords: %v (Original: %s,%s)\n", record, coords[0], coords[1])
 						}
-						fmt.Printf("Recorded: %v\n", record)
 					}
 				}
 			}

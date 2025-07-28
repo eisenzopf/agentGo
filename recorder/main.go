@@ -11,7 +11,6 @@ import (
 	"image/png"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/go-vgo/robotgo"
@@ -20,7 +19,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-const recordingTime = 30 * time.Second
+const recordingTime = 10 * time.Second
 
 func main() {
 	// Get API key from environment variable
@@ -53,23 +52,24 @@ func main() {
 	defer writer.Flush()
 
 	// Write CSV header
-	if err := writer.Write([]string{"timestamp", "x", "y"}); err != nil {
+	if err := writer.Write([]string{"timestamp", "norm_x", "norm_y"}); err != nil {
 		log.Fatalf("failed to write header to csv: %v", err)
 	}
 
 	log.Println("Starting to record mouse movements for 30 seconds...")
 
-	// Main loop to capture screen and get cursor position
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	startTime := time.Now()
 	bounds := screenshot.GetDisplayBounds(0)
-
-	// Get scaling factor for drawing mouse on screenshot
+	
+	// Get screen dimensions
 	logicalWidth, logicalHeight := robotgo.GetScreenSize()
 	physicalWidth := bounds.Dx()
 	physicalHeight := bounds.Dy()
+
+	// Get scaling factor for drawing mouse on screenshot
 	xScale := float64(physicalWidth) / float64(logicalWidth)
 	yScale := float64(physicalHeight) / float64(logicalHeight)
 
@@ -79,9 +79,24 @@ func main() {
 			log.Println("Recording finished.")
 			return
 		case t := <-ticker.C:
-			// Get mouse position
+			// --- Step 1: Get mouse position directly and normalize it ---
 			mouseX, mouseY := robotgo.GetMousePos()
+			normX := float64(mouseX) / float64(logicalWidth)
+			normY := float64(mouseY) / float64(logicalHeight)
 
+			// --- Step 2: Write the directly-sourced coordinates to the CSV ---
+			timestamp := t.Sub(startTime).Milliseconds()
+			record := []string{
+				fmt.Sprintf("%d", timestamp),
+				fmt.Sprintf("%.8f", normX),
+				fmt.Sprintf("%.8f", normY),
+			}
+			if err := writer.Write(record); err != nil {
+				log.Printf("failed to write record to csv: %v", err)
+			}
+			fmt.Printf("Recorded Normalized Coords: %v\n", record)
+
+			// --- Step 3: Continue with visual analysis for debugging and future use ---
 			// Capture the screen
 			img, err := screenshot.CaptureRect(bounds)
 			if err != nil {
@@ -108,36 +123,21 @@ func main() {
 				log.Printf("failed to encode image: %v", err)
 				continue
 			}
-
-			// --- DEBUG: Save the screenshot to a file with coordinates ---
+			
+			// Save a debug screenshot
 			debugFilename := fmt.Sprintf("debug_x%d_y%d_t%d.png", drawX, drawY, t.Unix())
 			if err := os.WriteFile(debugFilename, buf.Bytes(), 0644); err != nil {
 				log.Printf("failed to create debug file: %v", err)
 			}
-			// --- END DEBUG ---
-			
-			// Send the image to Gemini
-			prompt := "Find the red square in this image and return its top-left x,y coordinates. For example: 123,456"
-			res, err := model.GenerateContent(ctx, genai.Text(prompt), genai.ImageData("png", buf.Bytes()))
-			if err != nil {
-				log.Printf("failed to generate content: %v", err)
-				continue
-			}
 
-			// Extract and print the coordinates from the response
-			if len(res.Candidates) > 0 && len(res.Candidates[0].Content.Parts) > 0 {
-				if coordsText, ok := res.Candidates[0].Content.Parts[0].(genai.Text); ok {
-					coords := strings.Split(strings.TrimSpace(string(coordsText)), ",")
-					if len(coords) == 2 {
-						timestamp := t.Sub(startTime).Milliseconds()
-						record := []string{fmt.Sprintf("%d", timestamp), coords[0], coords[1]}
-						if err := writer.Write(record); err != nil {
-							log.Printf("failed to write record to csv: %v", err)
-						}
-						fmt.Printf("Recorded Raw Coords: %v\n", record)
-					}
+			// Send the image to Gemini (its response is not used for recording anymore, but is useful for future steps)
+			prompt := "Find the red square in this image and return its top-left x,y coordinates. For example: 123,456"
+			go func() {
+				_, err := model.GenerateContent(ctx, genai.Text(prompt), genai.ImageData("png", buf.Bytes()))
+				if err != nil {
+					log.Printf("Gemini call failed (this is for info only): %v", err)
 				}
-			}
+			}()
 		}
 	}
 }

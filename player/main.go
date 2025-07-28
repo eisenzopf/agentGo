@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-vgo/robotgo"
-	"github.com/kbinani/screenshot"
 )
 
 func main() {
@@ -31,22 +30,9 @@ func main() {
 		records = records[1:]
 	}
 
-	// Get screen dimensions for scaling
+	// Get logical screen dimensions for playback
 	logicalWidth, logicalHeight := robotgo.GetScreenSize()
-	bounds := screenshot.GetDisplayBounds(0)
-	physicalWidth := bounds.Dx()
-	physicalHeight := bounds.Dy()
-
-	if physicalWidth == 0 || physicalHeight == 0 {
-		log.Fatal("Could not get physical screen dimensions.")
-	}
-
-	xScale := float64(logicalWidth) / float64(physicalWidth)
-	yScale := float64(logicalHeight) / float64(physicalHeight)
-
-	log.Printf("Physical (Screenshot) Dimensions: %d x %d", physicalWidth, physicalHeight)
-	log.Printf("Logical (Mouse) Dimensions: %d x %d", logicalWidth, logicalHeight)
-	log.Printf("Applying scaling factors: x=%.2f, y=%.2f", xScale, yScale)
+	log.Printf("Playing back on logical screen size: %d x %d", logicalWidth, logicalHeight)
 
 	log.Println("Starting mouse playback...")
 
@@ -64,14 +50,14 @@ func main() {
 			log.Printf("failed to parse timestamp: %v", err)
 			continue
 		}
-		rawX, err := strconv.Atoi(record[1])
+		normX, err := strconv.ParseFloat(record[1], 64)
 		if err != nil {
-			log.Printf("failed to parse x coordinate: %v", err)
+			log.Printf("failed to parse normalized x coordinate: %v", err)
 			continue
 		}
-		rawY, err := strconv.Atoi(record[2])
+		normY, err := strconv.ParseFloat(record[2], 64)
 		if err != nil {
-			log.Printf("failed to parse y coordinate: %v", err)
+			log.Printf("failed to parse normalized y coordinate: %v", err)
 			continue
 		}
 
@@ -82,10 +68,11 @@ func main() {
 		}
 		lastTimestamp = timestamp
 
-		// Scale the coordinates and move the mouse
-		finalX := int(float64(rawX) * xScale)
-		finalY := int(float64(rawY) * yScale)
-		fmt.Printf("Moving mouse to (%d, %d) (Raw: %d,%d)\n", finalX, finalY, rawX, rawY)
+		// De-normalize the coordinates for the current screen and move the mouse
+		finalX := int(normX * float64(logicalWidth))
+		finalY := int(normY * float64(logicalHeight))
+		
+		fmt.Printf("Moving mouse to (%d, %d) (Normalized: %.4f, %.4f)\n", finalX, finalY, normX, normY)
 		robotgo.Move(finalX, finalY)
 	}
 

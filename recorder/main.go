@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,24 +28,6 @@ func main() {
 	if apiKey == "" {
 		log.Fatal("GEMINI_API_KEY environment variable not set")
 	}
-
-	// Get screen dimensions for scaling
-	logicalWidth, logicalHeight := robotgo.GetScreenSize()
-	bounds := screenshot.GetDisplayBounds(0)
-	physicalWidth := bounds.Dx()
-	physicalHeight := bounds.Dy()
-
-	if physicalWidth == 0 || physicalHeight == 0 {
-		log.Fatal("Could not get physical screen dimensions.")
-	}
-
-	xScale := float64(logicalWidth) / float64(physicalWidth)
-	yScale := float64(logicalHeight) / float64(physicalHeight)
-
-	log.Printf("Physical (Screenshot) Dimensions: %d x %d", physicalWidth, physicalHeight)
-	log.Printf("Logical (Mouse) Dimensions: %d x %d", logicalWidth, logicalHeight)
-	log.Printf("Scaling factors: x=%.2f, y=%.2f", xScale, yScale)
-
 
 	// Create a new Gemini client
 	ctx, cancel := context.WithTimeout(context.Background(), recordingTime)
@@ -80,6 +64,14 @@ func main() {
 	defer ticker.Stop()
 
 	startTime := time.Now()
+	bounds := screenshot.GetDisplayBounds(0)
+
+	// Get scaling factor for drawing mouse on screenshot
+	logicalWidth, logicalHeight := robotgo.GetScreenSize()
+	physicalWidth := bounds.Dx()
+	physicalHeight := bounds.Dy()
+	xScale := float64(physicalWidth) / float64(logicalWidth)
+	yScale := float64(physicalHeight) / float64(logicalHeight)
 
 	for {
 		select {
@@ -87,6 +79,9 @@ func main() {
 			log.Println("Recording finished.")
 			return
 		case t := <-ticker.C:
+			// Get mouse position
+			mouseX, mouseY := robotgo.GetMousePos()
+
 			// Capture the screen
 			img, err := screenshot.CaptureRect(bounds)
 			if err != nil {
@@ -94,15 +89,35 @@ func main() {
 				continue
 			}
 
-			// Encode the image to PNG
+			// Create a new RGBA image to draw on
+			drawableImg := image.NewRGBA(img.Bounds())
+			draw.Draw(drawableImg, drawableImg.Bounds(), img, image.Point{}, draw.Src)
+
+			// Calculate the position to draw the cursor on the physical screenshot
+			drawX := int(float64(mouseX) * xScale)
+			drawY := int(float64(mouseY) * yScale)
+
+			// Draw a red square to represent the cursor
+			cursorColor := color.RGBA{R: 255, G: 0, B: 0, A: 255}
+			cursorSize := 15
+			draw.Draw(drawableImg, image.Rect(drawX, drawY, drawX+cursorSize, drawY+cursorSize), &image.Uniform{C: cursorColor}, image.Point{}, draw.Src)
+
+			// Encode the modified image to PNG
 			var buf bytes.Buffer
-			if err := png.Encode(&buf, img); err != nil {
+			if err := png.Encode(&buf, drawableImg); err != nil {
 				log.Printf("failed to encode image: %v", err)
 				continue
 			}
 
+			// --- DEBUG: Save the screenshot to a file with coordinates ---
+			debugFilename := fmt.Sprintf("debug_x%d_y%d_t%d.png", drawX, drawY, t.Unix())
+			if err := os.WriteFile(debugFilename, buf.Bytes(), 0644); err != nil {
+				log.Printf("failed to create debug file: %v", err)
+			}
+			// --- END DEBUG ---
+			
 			// Send the image to Gemini
-			prompt := "Find the mouse cursor in this image and return its x,y coordinates. For example: 123,456"
+			prompt := "Find the red square in this image and return its top-left x,y coordinates. For example: 123,456"
 			res, err := model.GenerateContent(ctx, genai.Text(prompt), genai.ImageData("png", buf.Bytes()))
 			if err != nil {
 				log.Printf("failed to generate content: %v", err)
@@ -114,21 +129,12 @@ func main() {
 				if coordsText, ok := res.Candidates[0].Content.Parts[0].(genai.Text); ok {
 					coords := strings.Split(strings.TrimSpace(string(coordsText)), ",")
 					if len(coords) == 2 {
-						geminiX, errX := strconv.Atoi(coords[0])
-						geminiY, errY := strconv.Atoi(coords[1])
-
-						if errX == nil && errY == nil {
-							// Scale the coordinates
-							finalX := int(float64(geminiX) * xScale)
-							finalY := int(float64(geminiY) * yScale)
-
-							timestamp := t.Sub(startTime).Milliseconds()
-							record := []string{fmt.Sprintf("%d", timestamp), fmt.Sprintf("%d", finalX), fmt.Sprintf("%d", finalY)}
-							if err := writer.Write(record); err != nil {
-								log.Printf("failed to write record to csv: %v", err)
-							}
-							fmt.Printf("Recorded Scaled Coords: %v (Original: %s,%s)\n", record, coords[0], coords[1])
+						timestamp := t.Sub(startTime).Milliseconds()
+						record := []string{fmt.Sprintf("%d", timestamp), coords[0], coords[1]}
+						if err := writer.Write(record); err != nil {
+							log.Printf("failed to write record to csv: %v", err)
 						}
+						fmt.Printf("Recorded Raw Coords: %v\n", record)
 					}
 				}
 			}
